@@ -86,7 +86,7 @@ Nhóm cố ý **không** ghi: ticket thô, `parent_secret`, header, SĐT, địa
 - **Secret leak:** 0 trên public. `test_shape_trace_and_result_have_no_secret_or_pii` quét trace và `RunResult` của 4 shape, tìm `CANARY_SECRET_*` và giá trị PII. Lệnh `Select-String` trên `src/traces/` không tìm thấy gì.
 - **Toàn bộ test:** `python -m pytest -q` ra 73 passed. `python -m pytest -q -m student -o addopts=` ra 276 passed, 0 failed. `python -m lab8.check_submission` ra 0 FAIL.
 - **Tái lập:** chạy lại benchmark và crash trên commit `8413054` cho kết quả trùng khớp hoàn toàn với file đã commit.
-- **Bộ hidden (`student_drop/`):** nhóm chưa có kết quả tự kiểm tại thời điểm viết báo cáo. Điểm chính thức do grader của giảng viên chấm.
+- **Tự kiểm bộ hidden** (`src/reports/hidden_selfcheck.json`, 40 claim × 5 seed, không có nhãn): 0/800 trial lỗi, 0 trace sai contract, 0 `leak_suspect`. Ba shape nhóm viết trả cùng status trên cả 200 trial mỗi shape (denied 95, escalated 10, needs_info 5, resolved 90) và không dao động theo seed. Swarm khác nhóm ở 6 claim, chỉ ở seed 55 (C-H01, C-H02, C-H04, C-H13, C-H20: swarm `resolved`, nhóm `denied`; C-H40: swarm `denied`, nhóm `resolved`), đúng với điểm yếu tin số ngày trong ticket. Không có nhãn nên đây không phải pass rate; điểm chính thức do grader của giảng viên chấm.
 
 Quyết định kiến trúc và lý do: xem `report/team/decision_adr.md` (chọn **workflow**). Phiếu nghiên cứu và ablation: xem `report/team/research_card.md` (R2, MAST: lỗi swarm thuộc FC3, FM-3.3 Incorrect verification; ablation đổi seed sang `5,10,15,20,25` cho swarm 0.929 ở mọi seed, cả 5 trial fail đều là C-002).
 
@@ -113,7 +113,7 @@ MockLLM không phải model sản xuất; latency là `unavailable`.
 
 **Giới hạn của nhóm:**
 - **MockLLM cố định theo seed.** Variance 0 của ba shape nhóm viết không chứng minh được độ ổn định với model thật. Với MockLLM, `decide` của single là luật cố định, nên benchmark chưa đo được giá trị thật của việc để model chọn bước.
-- **Bộ public nhỏ.** Chỉ có 14 claim, và chỉ một claim có số ngày trong ticket khác order. Pass 1.000 trên public chưa bảo đảm đạt ngưỡng 0.75 trên 40 claim hidden (homoglyph, principal lẫn, policy hết hiệu lực, cộng dồn sai…). Nhóm chưa có kết quả tự kiểm trên `student_drop/`.
+- **Bộ public nhỏ.** Chỉ có 14 claim, và chỉ một claim có số ngày trong ticket khác order. Pass 1.000 trên public chưa bảo đảm đạt ngưỡng 0.75 trên 40 claim hidden (homoglyph, principal lẫn, policy hết hiệu lực, cộng dồn sai…). Tự kiểm trên `student_drop/` chỉ cho biết các shape chạy ổn định và thống nhất với nhau; vì ba shape dùng chung `compute_compensation` và host, một lỗi chung của cả ba sẽ không lộ ra khi không có nhãn.
 - **Cost là giá mô phỏng** trong `config/pricing.yaml`, không phải hóa đơn API.
 - **Orchestrator chỉ dùng một nhóm investigator chạy tuần tự** và không đưa `lookup_refund_history` cho investigator (host đã tự trừ phần đã hoàn). Vì vậy nhóm chưa đo được lợi ích của investigator song song.
 
