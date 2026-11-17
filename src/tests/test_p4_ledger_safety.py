@@ -1,5 +1,4 @@
-"""P4 — ledger, crash và secret: test của nhóm.
-
+"""
 Hai lớp test:
 - Host (chạy trong cổng `python -m pytest -q`, luôn xanh): chứng minh vì sao shape
   phải truyền quote đầy đủ và host chặn approval sai claim.
