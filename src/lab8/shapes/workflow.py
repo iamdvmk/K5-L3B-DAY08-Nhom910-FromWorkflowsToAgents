@@ -29,8 +29,20 @@ ones. `lab8.trace.Trace` does this; your own tracer is fine if it matches.
 
 from __future__ import annotations
 
-from lab8.schemas import RunResult
-from lab8.shapes.common import not_implemented
+from lab8.db import connect
+from lab8.durability import InjectedCrash, issue_refund
+from lab8.mock_llm import complete
+from lab8.schemas import Budget, RunResult, make_run_id
+from lab8.shapes.common import finish
+from lab8.tools import (
+    compute_compensation,
+    get_claim_view,
+    lookup_order,
+    tool_cost,
+)
+from lab8.trace import Trace
+
+SHAPE = "workflow"
 
 
 def run_claim(
@@ -40,7 +52,73 @@ def run_claim(
     store_path: str,
     crash_at: str | None = None,
 ) -> RunResult:
-    # TODO CP2 (student): thay stub này bằng shape workflow theo các bước ở docstring đầu file.
-    # TODO CP3 (student): truyền crash_at vào durability.issue_refund, không bắt InjectedCrash.
-    del store_path, crash_at
-    return not_implemented("workflow", claim_id, seed)
+    conn = connect(store_path)
+    try:
+        return _run(conn, claim_id, seed=seed, crash_at=crash_at)
+    finally:
+        conn.close()
+
+
+def _run(conn, claim_id: str, *, seed: int, crash_at: str | None) -> RunResult:
+    budget = Budget()
+    trace = Trace(make_run_id(SHAPE, claim_id, seed))
+
+    def done(status: str, amount: int, reason: str | None = None) -> RunResult:
+        trace.add("decision", {"status": status, "proposal_amount": amount, "reason": reason})
+        return finish(
+            conn,
+            shape=SHAPE,
+            claim_id=claim_id,
+            seed=seed,
+            status=status,
+            proposal_amount=amount,
+            budget=budget,
+            trace=trace,
+            error_reason=reason,
+        )
+
+    # 1. Read the claim through the allowlisted view.
+    budget.add_tool(tool_cost())
+    claim = get_claim_view(conn, claim_id)
+    trace.add("claim_view", {"found": claim["found"], "claim_id": claim_id})
+    if not claim["found"]:
+        return done("failed", 0, "unknown_claim")
+
+    # 2. Missing order_id -> needs_info (never parse an id from the ticket).
+    if not claim.get("order_id"):
+        complete(budget, seed=seed, purpose="draft", prompt="needs_info")
+        return done("needs_info", 0, "missing_order_id")
+
+    # 3. Order visible to this principal?
+    budget.add_tool(tool_cost())
+    order_view = lookup_order(conn, claim["order_id"], claim["principal_id"])
+    trace.add("lookup_order", {"visible": order_view["visible"], "reason": order_view["reason"]})
+    if not order_view["visible"]:
+        complete(budget, seed=seed, purpose="draft", prompt="escalated")
+        return done("escalated", 0, order_view["reason"])
+
+    # 4. Money is computed in code from the order row, not from the ticket.
+    order = order_view["order"]
+    budget.add_tool(tool_cost())
+    quote = compute_compensation(conn, order)
+    proposal = int(quote["amount_vnd"])
+    trace.add("quote", {"amount_vnd": proposal, "reason": quote["reason"], "clause_ids": quote["clause_ids"]})
+
+    # 5. Nothing owed -> denied, host not called.
+    if proposal <= 0:
+        complete(budget, seed=seed, purpose="draft", prompt="denied")
+        return done("denied", 0, quote["reason"])
+
+    # 6. Host is the only writer. Pass the FULL quote and crash_at; let InjectedCrash propagate.
+    try:
+        outcome = issue_refund(conn, claim_id, proposal, crash_at=crash_at)
+    except InjectedCrash:
+        trace.add("crash", {"at": crash_at})
+        trace.write()
+        raise
+    trace.add("issue_refund", {"ok": outcome["ok"], "reason": outcome["reason"], "conflict": outcome["conflict"]})
+
+    complete(budget, seed=seed, purpose="draft", prompt=f"proposal={proposal}")
+    if not outcome["ok"]:
+        return done("failed" if outcome["conflict"] else "denied", proposal, outcome["reason"])
+    return done("resolved", proposal)
