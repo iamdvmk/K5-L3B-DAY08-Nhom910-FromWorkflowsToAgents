@@ -98,6 +98,9 @@ def run_claim(
                     status, error_reason = "denied", quote["reason"]
                 else:
                     budget.add_tool(tool_cost())
+                    # Persist the attempt before the host can inject a crash.
+                    trace.add("refund_attempt", {"proposal_amount": proposal, "crash_at": crash_at})
+                    trace.write()
                     outcome = issue_refund(conn, claim_id, proposal, crash_at=crash_at)
                     trace.add("refund", {"ok": outcome["ok"], "reason": outcome["reason"]})
                     status = "resolved" if outcome["ok"] else (
