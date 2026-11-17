@@ -20,8 +20,14 @@ ones. `lab8.trace.Trace` does this; your own tracer is fine if it matches.
 
 from __future__ import annotations
 
-from lab8.schemas import RunResult
-from lab8.shapes.common import not_implemented
+from lab8.db import connect
+from lab8.durability import issue_refund
+from lab8.mock_llm import complete
+from lab8.runtime import run_react
+from lab8.schemas import Budget, RunResult, make_run_id
+from lab8.shapes.common import finish
+from lab8.tools import compute_compensation, get_claim_view, lookup_order, tool_cost
+from lab8.trace import Trace
 
 
 def run_claim(
@@ -31,7 +37,77 @@ def run_claim(
     store_path: str,
     crash_at: str | None = None,
 ) -> RunResult:
-    # TODO CP2 (student): thay stub này bằng shape single theo các bước ở docstring đầu file.
-    # TODO CP3 (student): truyền crash_at vào durability.issue_refund, không bắt InjectedCrash.
-    del store_path, crash_at
-    return not_implemented("single", claim_id, seed)
+    conn = connect(store_path)
+    budget = Budget()
+    trace = Trace(make_run_id("single", claim_id, seed))
+    try:
+        budget.add_tool(tool_cost())
+        claim = get_claim_view(conn, claim_id)
+        # Never put the raw ticket (which may contain PII) in the trace.
+        trace.add("claim", {"found": claim["found"], "claim_id": claim_id})
+        state = {}
+
+        def decide(observation):
+            last_tool = observation.get("last_tool")
+            if last_tool:
+                state[last_tool] = observation["last_result"]
+                trace.add("read", {"tool": last_tool})
+
+            complete(budget, seed=seed, purpose="decide", prompt=(
+                f"claim={claim_id}; completed={','.join(state)}"
+            ))
+            if not claim["found"]:
+                return {"final": {"status": "failed", "error_reason": "unknown_claim"}}
+            if not claim.get("order_id"):
+                return {"final": {"status": "needs_info", "error_reason": "missing_order_id"}}
+
+            scope_args = {"order_id": claim["order_id"], "principal_id": claim["principal_id"]}
+            if "lookup_order" not in state:
+                return {"tool": "lookup_order", "args": scope_args}
+            order_view = state["lookup_order"]
+            if not order_view["visible"]:
+                return {"final": {"status": "escalated", "error_reason": order_view["reason"]}}
+            if "lookup_refund_history" not in state:
+                return {"tool": "lookup_refund_history", "args": scope_args}
+            if "compute_compensation" not in state:
+                return {"tool": "compute_compensation", "args": {"order": order_view["order"]}}
+            return {"final": {"quote": state["compute_compensation"]}}
+
+        result = run_react(
+            conn, budget, observation={"claim": claim}, decide=decide, max_steps=8,
+            worker=True,
+        )
+        final = result["final"]
+        proposal = 0
+        status = final.get("status", "failed")
+        error_reason = final.get("error_reason")
+        if "quote" in final:
+            # Independently validate against the scoped order and current policy.
+            budget.add_tool(tool_cost())
+            order_view = lookup_order(conn, claim["order_id"], claim["principal_id"])
+            if not order_view["visible"]:
+                status, error_reason = "escalated", order_view["reason"]
+            else:
+                budget.add_tool(tool_cost())
+                quote = compute_compensation(conn, order_view["order"])
+                proposal = int(quote["amount_vnd"])
+                trace.add("quote", quote)
+                if final["quote"] != quote:
+                    status, error_reason = "failed", "quote_mismatch"
+                elif proposal <= 0:
+                    status, error_reason = "denied", quote["reason"]
+                else:
+                    budget.add_tool(tool_cost())
+                    outcome = issue_refund(conn, claim_id, proposal, crash_at=crash_at)
+                    trace.add("refund", {"ok": outcome["ok"], "reason": outcome["reason"]})
+                    status = "resolved" if outcome["ok"] else (
+                        "failed" if outcome["conflict"] else "denied"
+                    )
+                    error_reason = None if outcome["ok"] else outcome["reason"]
+        trace.add("decision", {"status": status, "error_reason": error_reason})
+        return finish(
+            conn, shape="single", claim_id=claim_id, seed=seed, status=status,
+            proposal_amount=proposal, budget=budget, trace=trace, error_reason=error_reason,
+        )
+    finally:
+        conn.close()
