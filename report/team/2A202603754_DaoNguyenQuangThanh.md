@@ -34,4 +34,5 @@
 - Cách kiểm chứng đã thực hiện trong phiên: đối chiếu `CHECKPOINTS.md`, luật nghiệp vụ và contract; chạy pytest có sẵn và test bổ sung; đối chiếu ledger, audit, checkpoint, trace và stdout/stderr trong các ca kiểm tra trực tiếp.
 
 ## 6. Tự đánh giá
-
+- Đã hoàn thành phần phụ trách Shape C và 4 test bổ sung, tập trung vào handoff chỉ đọc và trace an toàn. Theo benchmark chung của nhóm ở CP5, orchestrator đạt pass rate và pass^5 bằng 1.000 trên 70 trial public, variance 0; đây là kết quả đánh giá của nhóm trên phần triển khai đã tích hợp.
+- Từ kết quả nhóm, nhận thấy orchestrator chưa đem lại lợi ích về độ đúng so với workflow nhưng có cost/success mô phỏng cao hơn (47,44 so với 28,79 VND), phù hợp với quyết định chọn workflow trong ADR.
