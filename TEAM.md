@@ -123,16 +123,48 @@ Shape A `workflow` (`src/lab8/shapes/workflow.py`) và vai tích hợp (chạy `
 - `src/reports/benchmark.json`: workflow pass 1.000 / pass^5 1.000 / variance 0 / cost/success 28.79 VND; swarm 0.986 / 0.929 / 0.000816 / 49.57, trượt duy nhất ở `R-swarm-C-002-s55` (`status resolved != denied`).
 - `python -m lab8.demo.buggy_workflow` → `unsafe refund rows: 2`, dùng để giải thích vì sao checkpoint đơn lẻ không thay được ledger.
 
-## MSSV_HoTen
+## 2A202603757_TruongDucPhat
 
 ### Phần việc phụ trách
 
--
+Phụ trách Shape B `single` trong `src/lab8/shapes/single.py`, hoàn thiện CP2, CP3 và thêm test hồi quy trong `src/tests/test_single_extra.py`.
 
 ### Đóng góp cụ thể
 
--
+- Hoàn thiện `run_claim` bằng `lab8.runtime.run_react` với `max_steps=8`. Hàm `decide` chọn tool đọc để tra cứu đơn, lịch sử hoàn tiền và tính quote. Các model call được ghi nhận qua `Budget`.
+- Đọc claim qua `get_claim_view` và tra cứu đơn theo principal. Thiếu mã đơn trả `needs_info`, đơn không tìm thấy hoặc ngoài phạm vi principal trả `escalated`.
+- Tính tiền bằng `compute_compensation` dựa trên order và policy hiện hành. Sau vòng ReAct, host đọc lại order và tính lại quote để kiểm tra kết quả đề xuất.
+- Truyền quote đầy đủ vào `durability.issue_refund` để host kiểm tra approval và áp dụng trần hoàn tiền theo đơn. Quote bằng 0 trả `denied`; quote dương bị host từ chối giữ nguyên `proposal_amount` và có audit do host ghi.
+- Truyền `crash_at` vào `issue_refund`, để `InjectedCrash` truyền ra ngoài. Ghi sự kiện `refund_attempt` và lưu trace trước khi gọi host để có nhật ký khi crash.
+- Trả kết quả bằng `common.finish()` ở mọi nhánh return. Trace ghi các trường cần thiết và dữ liệu quote, tránh ghi ticket thô hoặc dữ liệu riêng tư của khách hàng.
+- Thêm test `test_single_crash_persists_trace_before_resume`, tham số hóa tại ba điểm `before_effect`, `after_effect_before_checkpoint` và `after_checkpoint`. Test dùng thư mục trace riêng, kiểm tra trace ngay sau crash, kiểm tra trạng thái ledger tại thời điểm crash và chạy resume hai lần để xác nhận chỉ có một refund cùng một audit committed.
 
 ### Bằng chứng
 
--
+Các commit liên quan trong lịch sử repository gồm
+
+| Commit | Nội dung |
+| --- | --- |
+| `b7c0960` | Hoàn thiện CP2 cho shape single |
+| `0abb7d3` | Bổ sung lưu trace trước khi gọi host cho CP3 |
+| `cf354bb` | Thêm test hồi quy trace và crash/resume cho single |
+
+Các lệnh dưới đây chạy trong thư mục `src`. Kết quả được ghi nhận trong phiên phát triển với trợ lý AI.
+
+```powershell
+python -m pytest tests/test_public_matrix.py -q -m student -o addopts= -k "single and not workflow and not orchestrator and not swarm"
+```
+
+Kết quả `62 passed`, bao gồm T01–T14 trên single và các kịch bản retry T11, crash/resume T12.
+
+```powershell
+python -m pytest -q -m student -o addopts= -k "single and not workflow and not orchestrator and not swarm"
+```
+
+Kết quả `69 passed` tại lần rà soát CP2 và CP3, gồm 62 test ma trận public, ba test crash/resume và bốn test secret/PII của nhóm.
+
+```powershell
+python -m pytest tests/test_single_extra.py -q
+```
+
+Kết quả `3 passed`. Ba trường hợp kiểm tra trace tồn tại ngay sau crash và resume/retry giữ nguyên một refund trị giá 35.000 VND cho claim `C-012`, cùng một audit `refund_committed`.
